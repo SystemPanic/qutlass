@@ -59,17 +59,23 @@ using namespace detail;
 CUTLASS_HOST_DEVICE
 static uint8_t f32_to_e4m3_hi(float v) {
   uint16_t packed;
+#if defined(__CUDA_ARCH__)
   // 0.0f → lower 8 bits, v → upper 8 bits
   asm volatile(
     "cvt.rn.satfinite.e4m3x2.f32 %0, %2, %1;\n"
     : "=h"(packed)
     : "f"(0.0f), "f"(v)
   );
+#else
+  // Host fallback: convert via cutlass FP8 type
+  packed = uint16_t(static_cast<uint8_t>(cutlass::float_e4m3_t(v))) << 8;
+#endif
   return uint8_t(packed >> 8);
 }
 
 CUTLASS_HOST_DEVICE
 static float e4m3_to_f32(uint8_t hi) {
+#if defined(__CUDA_ARCH__)
     uint16_t packed = uint16_t(hi) << 8;
     uint32_t fp16x2;
 
@@ -86,13 +92,21 @@ static float e4m3_to_f32(uint8_t hi) {
         : "=f"(out)
         : "h"(fp16_hi));
     return out;
+#else
+    // Host fallback: convert via cutlass FP8 type
+    return static_cast<float>(cutlass::float_e4m3_t::bitcast(hi));
+#endif
 }
 
 // Fast reciprocal.
 CUTLASS_HOST_DEVICE
 static float reciprocal_approximate_ftz(float a) {
   float b;
+#if defined(__CUDA_ARCH__)
   asm volatile("rcp.approx.ftz.f32 %0, %1;\n" : "=f"(b) : "f"(a));
+#else
+  b = 1.0f / a;
+#endif
   return b;
 }
 

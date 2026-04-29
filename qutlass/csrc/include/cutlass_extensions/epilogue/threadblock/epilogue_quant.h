@@ -78,6 +78,7 @@ CUTLASS_HOST_DEVICE
 static uint32_t fp32_vec_to_e2m1(float* array)
 {
     uint32_t val;
+#if defined(__CUDA_ARCH__)
     asm volatile(
         "{\n"
         ".reg .b8 byte0;\n"
@@ -93,24 +94,36 @@ static uint32_t fp32_vec_to_e2m1(float* array)
         : "=r"(val)
         : "f"(array[0]), "f"(array[1]), "f"(array[2]), "f"(array[3]),
         "f"(array[4]), "f"(array[5]), "f"(array[6]), "f"(array[7]));
+#else
+    // Host fallback — should never be called at runtime on host
+    val = 0;
+    (void)array;
+#endif
     return val;
 }
 
 CUTLASS_HOST_DEVICE
 static uint8_t f32_to_e4m3_hi(float v) {
   uint16_t packed;
+#if defined(__CUDA_ARCH__)
   // 0.0f → lower 8 bits, v → upper 8 bits
   asm volatile(
     "cvt.rn.satfinite.e4m3x2.f32 %0, %2, %1;\n"
     : "=h"(packed)
     : "f"(0.0f), "f"(v)
   );
+#else
+  packed = 0;
+  (void)v;
+#endif
   return uint8_t(packed >> 8);
 }
 
 CUTLASS_HOST_DEVICE
 static float e4m3_to_f32(uint8_t hi) {
     uint16_t packed = uint16_t(hi) << 8;
+    float out;
+#if defined(__CUDA_ARCH__)
     uint32_t fp16x2;
 
     asm volatile(
@@ -120,11 +133,14 @@ static float e4m3_to_f32(uint8_t hi) {
 
     uint16_t fp16_hi = static_cast<uint16_t>(fp16x2 >> 16);
 
-    float out;
     asm volatile(
         "cvt.f32.f16 %0, %1;"
         : "=f"(out)
         : "h"(fp16_hi));
+#else
+    out = 0.0f;
+    (void)packed;
+#endif
     return out;
 }
 
@@ -132,7 +148,11 @@ static float e4m3_to_f32(uint8_t hi) {
 CUTLASS_HOST_DEVICE
 static float reciprocal_approximate_ftz(float a) {
   float b;
+#if defined(__CUDA_ARCH__)
   asm volatile("rcp.approx.ftz.f32 %0, %1;\n" : "=f"(b) : "f"(a));
+#else
+  b = 1.0f / a;
+#endif
   return b;
 }
 
@@ -437,23 +457,44 @@ private:
 
   template<typename Epilogue>
   struct EpilogueOpImpl<32, Epilogue> {
-    template<typename... Args>
-    CUTLASS_DEVICE static void run(Epilogue& self, Args&&... args) {
-      self.template op_32(std::forward<Args>(args)...);
+    template<typename SourceAspect>
+    CUTLASS_DEVICE static void run(Epilogue& self,
+        OutputOp const &output_op,
+        OutputTileIterator destination_iterator,
+        AccumulatorTile const &accumulators,
+        SourceAspect source,
+        cutlass::float_e2m1_t* D,
+        cutlass::float_ue8m0_t* D_sf,
+        int problem_m_size) {
+      self.template op_32<SourceAspect>(output_op, destination_iterator, accumulators, source, D, D_sf, problem_m_size);
     }
   };
   template<typename Epilogue>
   struct EpilogueOpImpl<64, Epilogue> {
-    template<typename... Args>
-    CUTLASS_DEVICE static void run(Epilogue& self, Args&&... args) {
-      self.template op_64(std::forward<Args>(args)...);
+    template<typename SourceAspect>
+    CUTLASS_DEVICE static void run(Epilogue& self,
+        OutputOp const &output_op,
+        OutputTileIterator destination_iterator,
+        AccumulatorTile const &accumulators,
+        SourceAspect source,
+        cutlass::float_e2m1_t* D,
+        cutlass::float_ue8m0_t* D_sf,
+        int problem_m_size) {
+      self.template op_64<SourceAspect>(output_op, destination_iterator, accumulators, source, D, D_sf, problem_m_size);
     }
   };
   template<typename Epilogue>
   struct EpilogueOpImpl<128, Epilogue> {
-    template<typename... Args>
-    CUTLASS_DEVICE static void run(Epilogue& self, Args&&... args) {
-      self.template op_128(std::forward<Args>(args)...);
+    template<typename SourceAspect>
+    CUTLASS_DEVICE static void run(Epilogue& self,
+        OutputOp const &output_op,
+        OutputTileIterator destination_iterator,
+        AccumulatorTile const &accumulators,
+        SourceAspect source,
+        cutlass::float_e2m1_t* D,
+        cutlass::float_ue8m0_t* D_sf,
+        int problem_m_size) {
+      self.template op_128<SourceAspect>(output_op, destination_iterator, accumulators, source, D, D_sf, problem_m_size);
     }
   };
 
@@ -1098,30 +1139,62 @@ private:
 
   template<typename Epilogue>
   struct EpilogueOpImpl<16, Epilogue> {
-    template<typename... Args>
-    CUTLASS_DEVICE static void run(Epilogue& self, Args&&... args) {
-      self.template op_16(std::forward<Args>(args)...);
+    template<typename SourceAspect>
+    CUTLASS_DEVICE static void run(Epilogue& self,
+        OutputOp const &output_op,
+        OutputTileIterator destination_iterator,
+        AccumulatorTile const &accumulators,
+        SourceAspect source,
+        cutlass::float_e2m1_t* D,
+        cutlass::float_ue4m3_t* D_sf,
+        ElementAccumulator* global_scale,
+        int problem_m_size) {
+      self.template op_16<SourceAspect>(output_op, destination_iterator, accumulators, source, D, D_sf, global_scale, problem_m_size);
     }
   };
   template<typename Epilogue>
   struct EpilogueOpImpl<32, Epilogue> {
-    template<typename... Args>
-    CUTLASS_DEVICE static void run(Epilogue& self, Args&&... args) {
-      self.template op_32(std::forward<Args>(args)...);
+    template<typename SourceAspect>
+    CUTLASS_DEVICE static void run(Epilogue& self,
+        OutputOp const &output_op,
+        OutputTileIterator destination_iterator,
+        AccumulatorTile const &accumulators,
+        SourceAspect source,
+        cutlass::float_e2m1_t* D,
+        cutlass::float_ue4m3_t* D_sf,
+        ElementAccumulator* global_scale,
+        int problem_m_size) {
+      self.template op_32<SourceAspect>(output_op, destination_iterator, accumulators, source, D, D_sf, global_scale, problem_m_size);
     }
   };
   template<typename Epilogue>
   struct EpilogueOpImpl<64, Epilogue> {
-    template<typename... Args>
-    CUTLASS_DEVICE static void run(Epilogue& self, Args&&... args) {
-      self.template op_64(std::forward<Args>(args)...);
+    template<typename SourceAspect>
+    CUTLASS_DEVICE static void run(Epilogue& self,
+        OutputOp const &output_op,
+        OutputTileIterator destination_iterator,
+        AccumulatorTile const &accumulators,
+        SourceAspect source,
+        cutlass::float_e2m1_t* D,
+        cutlass::float_ue4m3_t* D_sf,
+        ElementAccumulator* global_scale,
+        int problem_m_size) {
+      self.template op_64<SourceAspect>(output_op, destination_iterator, accumulators, source, D, D_sf, global_scale, problem_m_size);
     }
   };
   template<typename Epilogue>
   struct EpilogueOpImpl<128, Epilogue> {
-    template<typename... Args>
-    CUTLASS_DEVICE static void run(Epilogue& self, Args&&... args) {
-      self.template op_128(std::forward<Args>(args)...);
+    template<typename SourceAspect>
+    CUTLASS_DEVICE static void run(Epilogue& self,
+        OutputOp const &output_op,
+        OutputTileIterator destination_iterator,
+        AccumulatorTile const &accumulators,
+        SourceAspect source,
+        cutlass::float_e2m1_t* D,
+        cutlass::float_ue4m3_t* D_sf,
+        ElementAccumulator* global_scale,
+        int problem_m_size) {
+      self.template op_128<SourceAspect>(output_op, destination_iterator, accumulators, source, D, D_sf, global_scale, problem_m_size);
     }
   };
 
