@@ -75,9 +75,9 @@ using OperatorClass       = cutlass::arch::OpClassTensorOp;
 constexpr int OutputSFVectorSize = 32;
 
 //TODO: tune
-using MmaTileShape_MNK = Shape<_256,_128,_128>;
-using ClusterShape_MNK = Shape<_4,_1,_1>;
-using PerSmTileShape_MNK = Shape<_256,_128,_128>;
+using MmaTileShape_MNK = Shape<_128,_128,_128>;
+using ClusterShape_MNK = Shape<_1,_1,_1>;
+using PerSmTileShape_MNK = Shape<_128,_128,_128>;
 
 using FusionOperation =
 cutlass::epilogue::fusion::qutlass::QutlassLinCombBlockScaleFactor<
@@ -199,32 +199,21 @@ void runGemm(torch::Tensor& D,
     CUTLASS_CHECK(gemm.run(arguments, workspace.get(), stream));
 }
 
-void fusedQuantizeMxQuest_host_sm100(torch::Tensor& D,
-                                     torch::Tensor& D_sf,
-                                     torch::Tensor const& A,
-                                     torch::Tensor const& B,
-                                     torch::Tensor const& global_scale)
-{
-
-    int32_t M = A.numel() / 128;
-    int32_t N = B.size(1);
-    int32_t K = 128;
-
-    runGemm(D, D_sf, A, B, global_scale, M, N, K, A.device());
-
-}
-
 void fusedQuantizeMxAbsMax_host_sm100(torch::Tensor& D,
                                       torch::Tensor& D_sf,
                                       torch::Tensor const& A,
                                       torch::Tensor const& B,
                                       torch::Tensor const& global_scale)
 {
+#if TARGET_CUDA_ARCH == 100
     int32_t M = A.numel() / 128;
     int32_t N = B.size(1);
     int32_t K = 128;
 
     runGemm(D, D_sf, A, B, global_scale, M, N, K, A.device());
+#else
+    TORCH_CHECK(false, "Unsupported CUDA arch");
+#endif
 }
 
 } // namespace QUTLASS
